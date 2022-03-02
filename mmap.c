@@ -23,13 +23,18 @@ static size_t page_size;
 static double *sqrts;
 
 // Use this helper function as an oracle for square root values.
+//args:
+//the address of the array
+//where in the square root to start 
 static void
 calculate_sqrts(double *sqrt_pos, int start, int nr)
 {
   int i;
 
-  for (i = 0; i < nr; i++)
+  for (i = 0; i < nr; i++) {
+    //printf("Calculating sqrt of: %d, at: %p\n", start, sqrt_pos);
     sqrt_pos[i] = sqrt((double)(start + i));
+  }
 }
 
 static void *mapped_page = NULL;
@@ -38,12 +43,35 @@ static void
 handle_sigsegv(int sig, siginfo_t *si, void *ctx)
 {
   // Your code here.
-  
-
   // replace these three lines with your implementation
+
+  if (mapped_page != NULL) {
+    if (munmap(mapped_page, page_size) == -1) {
+      fprintf(stderr, "Couldn't munmap() region for sqrt table; %s\n",
+	      strerror(errno));
+      exit(EXIT_FAILURE);
+    }
+    mapped_page = NULL;
+  }
+  
   uintptr_t fault_addr = (uintptr_t)si->si_addr;
-  printf("Got SIGSEGV at 0x%lx\n", fault_addr);
-  exit(EXIT_FAILURE);
+  //printf("Got SIGSEGV at 0x%lx\n", fault_addr);
+  
+  uintptr_t aligned = align_down(fault_addr, page_size);
+  //printf("Alignment: %lx\n", aligned); 
+
+  mapped_page = mmap((void*)aligned, page_size, PROT_WRITE | PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  if (mapped_page == MAP_FAILED) {
+    fprintf(stderr, "Couldn't mmap() region for sqrt table; %s\n",
+	    strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+  //printf("%f\n", (double*)mapped_page[0]);
+  uintptr_t nextsqrt = (uintptr_t)mapped_page-(uintptr_t)sqrts;
+  //printf("mapped page: %p\n", mapped_page);
+  //printf("nextsqrt/8: %ld\n", nextsqrt/sizeof(double));
+  calculate_sqrts((double*)aligned, nextsqrt/sizeof(double), (int)page_size/sizeof(double));
+  
 }
 
 static void
@@ -51,7 +79,6 @@ setup_sqrt_region(void)
 {
   struct rlimit lim = {AS_LIMIT, AS_LIMIT};
   struct sigaction act;
-
   // Only mapping to find a safe location for the table.
   sqrts = mmap(NULL, MAX_SQRTS * sizeof(double) + AS_LIMIT, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (sqrts == MAP_FAILED) {
@@ -59,24 +86,15 @@ setup_sqrt_region(void)
 	    strerror(errno));
     exit(EXIT_FAILURE);
   }
-
+  
   // Now release the virtual memory to remain under the rlimit.
   if (munmap(sqrts, MAX_SQRTS * sizeof(double) + AS_LIMIT) == -1) {
     fprintf(stderr, "Couldn't munmap() region for sqrt table; %s\n",
             strerror(errno));
     exit(EXIT_FAILURE);
-  }
+  }  
 
-  struct rlimit old_lim;
-  if( getrlimit(RLIMIT_AS, &old_lim) == 0) {
-    printf("Old limits -> soft limit= %ld \t"
-          " hard limit= %ld \n", old_lim.rlim_cur,
-                               old_lim.rlim_max);
-  } else {
-    fprintf(stderr, "%s\n", strerror(errno));
-  }
-        
-
+  
 
   // Set a soft rlimit on virtual address-space bytes.
   if (setrlimit(RLIMIT_AS, &lim) == -1) {
@@ -104,14 +122,22 @@ test_sqrt_region(void)
   srand(0xDEADBEEF);
 
   for (i = 0; i < 500000; i++) {
-    if (i % 2 == 0)
+    printf("%d\n", i);
+    if (i % 2 == 0) {
       pos = rand() % (MAX_SQRTS - 1);
-    else
+    }
+    else {
       pos += 1;
+    }
     calculate_sqrts(&correct_sqrt, pos, 1);
+    //printf("Comparing: %d, with sqrt: %f\n", pos, correct_sqrt);
+    //printf("pos*sizeof(*double): %ld\n", (pos * sizeof(sqrts)));
     if (sqrts[pos] != correct_sqrt) {
       fprintf(stderr, "Square root is incorrect. Expected %f, got %f.\n",
               correct_sqrt, sqrts[pos]);
+      printf("Square root is incorrect. Expected %f, got %f.\n",
+              correct_sqrt, sqrts[pos]);
+
       exit(EXIT_FAILURE);
     }
   }
