@@ -44,7 +44,7 @@ handle_sigsegv(int sig, siginfo_t *si, void *ctx)
 {
   // Your code here.
   // replace these three lines with your implementation
-
+  //if there is a mapped page we want to unmap it
   if (mapped_page != NULL) {
     if (munmap(mapped_page, page_size) == -1) {
       fprintf(stderr, "Couldn't munmap() region for sqrt table; %s\n",
@@ -56,17 +56,19 @@ handle_sigsegv(int sig, siginfo_t *si, void *ctx)
   
   uintptr_t fault_addr = (uintptr_t)si->si_addr;
   //printf("Got SIGSEGV at 0x%lx\n", fault_addr);
-  
+
+  //align downt the faulting address to the page size
   uintptr_t aligned = align_down(fault_addr, page_size);
   //printf("Alignment: %lx\n", aligned); 
 
+  //map the aligned address and make sure no error occurred. Also need to use prot_write and prot_read in order to read/write from the array
   mapped_page = mmap((void*)aligned, page_size, PROT_WRITE | PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (mapped_page == MAP_FAILED) {
     fprintf(stderr, "Couldn't mmap() region for sqrt table; %s\n",
 	    strerror(errno));
     exit(EXIT_FAILURE);
   }
-  //printf("%f\n", (double*)mapped_page[0]);
+  //if sqrts[0] is the sqrt of 0, then mapped-page-sqrts /sizeof(double) can get us the number that should start at the mapped address
   uintptr_t nextsqrt = (uintptr_t)mapped_page-(uintptr_t)sqrts;
   //printf("mapped page: %p\n", mapped_page);
   //printf("nextsqrt/8: %ld\n", nextsqrt/sizeof(double));
@@ -122,7 +124,7 @@ test_sqrt_region(void)
   srand(0xDEADBEEF);
 
   for (i = 0; i < 500000; i++) {
-    printf("%d\n", i);
+    //printf("%d\n", i);
     if (i % 2 == 0) {
       pos = rand() % (MAX_SQRTS - 1);
     }
@@ -130,8 +132,6 @@ test_sqrt_region(void)
       pos += 1;
     }
     calculate_sqrts(&correct_sqrt, pos, 1);
-    //printf("Comparing: %d, with sqrt: %f\n", pos, correct_sqrt);
-    //printf("pos*sizeof(*double): %ld\n", (pos * sizeof(sqrts)));
     if (sqrts[pos] != correct_sqrt) {
       fprintf(stderr, "Square root is incorrect. Expected %f, got %f.\n",
               correct_sqrt, sqrts[pos]);
